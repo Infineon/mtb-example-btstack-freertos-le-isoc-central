@@ -10,7 +10,7 @@ These code examples working together demonstrate the implementation of sending g
 
 [View this README on GitHub.](https://github.com/Infineon/mtb-example-btstack-freertos-le-isoc-central)
 
-[Provide feedback on this code example.](https://cypress.co1.qualtrics.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyMzg0NTMiLCJTcGVjIE51bWJlciI6IjAwMi0zODQ1MyIsIkRvYyBUaXRsZSI6IkFJUk9DJnRyYWRlOyBDWVcyMDgyOTogQmx1ZXRvb3RoJnJlZzsgTG93IEVuZXJneSBJc29jaHJvbm91cyBDZW50cmFsIiwicmlkIjoiamd1aSIsIkRvYyB2ZXJzaW9uIjoiMS4wLjAiLCJEb2MgTGFuZ3VhZ2UiOiJFbmdsaXNoIiwiRG9jIERpdmlzaW9uIjoiTUNEIiwiRG9jIEJVIjoiSUNXIiwiRG9jIEZhbWlseSI6IkJUQUJMRSJ9)
+[Provide feedback on this code example.](https://cypress.co1.qualtrics.com/jfe/form/SV_1NTns53sK2yiljn?Q_EED=eyJVbmlxdWUgRG9jIElkIjoiQ0UyMzg0NTMiLCJTcGVjIE51bWJlciI6IjAwMi0zODQ1MyIsIkRvYyBUaXRsZSI6IkFJUk9DJnRyYWRlOyBDWVcyMDgyOTogQmx1ZXRvb3RoJnJlZzsgTG93IEVuZXJneSBJc29jaHJvbm91cyBDZW50cmFsIiwicmlkIjoiamd1aSIsIkRvYyB2ZXJzaW9uIjoiMS4wLjEiLCJEb2MgTGFuZ3VhZ2UiOiJFbmdsaXNoIiwiRG9jIERpdmlzaW9uIjoiTUNEIiwiRG9jIEJVIjoiSUNXIiwiRG9jIEZhbWlseSI6IkJUQUJMRSJ9)
 
 
 
@@ -264,9 +264,7 @@ For a list of supported IDEs and more details, see the "Exporting to IDEs" secti
 
 ### MAX_CONNECTED_DEVICES compiler option (CIS configuration parameter)
 
-**Note:** This option is not available for the current release.
-
-This parameter defines the number of peripherals and CIS channels to support (default is '1'). Do the following to exercise the two CIS configurations.
+This parameter defines the number of peripherals and CIS channels to support (default is '1', maximum supported in this version is '2'). Do the following to exercise the two CIS configurations.
 
 1. In the application Makefile, set `MAX_CONNECTED_DEVICES?=2`.
 
@@ -396,6 +394,7 @@ Document title: *CE238453* – *AIROC&trade; CYW20829: Bluetooth&reg; Low Energy
 | Version | Description of change |
 | ------- | --------------------- |
 | 1.0.0   | New code example      |
+| 1.0.1   | Support 2 peripherals |
 
 -------------------------------------------------------------------------------
 

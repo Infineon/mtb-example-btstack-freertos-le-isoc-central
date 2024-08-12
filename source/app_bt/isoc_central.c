@@ -496,50 +496,50 @@ CY_SECTION_RAMFUNC_END
 #ifdef  USE_CIS_TEST_PARAM
 static wiced_result_t isoc_set_cig()
 {
-	wiced_result_t                 result;
-	    wiced_bt_ble_cis_config_test_t cis_config_list_test[MAX_CIS_PER_CIG];
-	    wiced_bt_ble_cig_param_test_t  cig_param_test;
-	    uint8_t                        index;
+    wiced_result_t                 result;
+        wiced_bt_ble_cis_config_test_t cis_config_list_test[MAX_CIS_PER_CIG];
+        wiced_bt_ble_cig_param_test_t  cig_param_test;
+        uint8_t                        index;
 
-	    printf("[%s] cis_per_cig count %d \r\n", __FUNCTION__, MAX_CIS_PER_CIG);
+        printf("[%s] cis_per_cig count %d \r\n", __FUNCTION__, MAX_CIS_PER_CIG);
 
-	    cig_param_test.cig_id    = 0;
-	    cig_param_test.cis_count = MAX_CIS_PER_CIG;
+        cig_param_test.cig_id    = 0;
+        cig_param_test.cis_count = MAX_CIS_PER_CIG;
 
-	    cig_param_test.sdu_interval_c_to_p       = ISO_SDU_INTERVAL;
-	    cig_param_test.sdu_interval_p_to_c       = ISO_SDU_INTERVAL;
-	    cig_param_test.peripheral_clock_accuracy = 0;
+        cig_param_test.sdu_interval_c_to_p       = ISO_SDU_INTERVAL;
+        cig_param_test.sdu_interval_p_to_c       = ISO_SDU_INTERVAL;
+        cig_param_test.peripheral_clock_accuracy = 0;
 
-	    cig_param_test.packing = WICED_BLE_ISOC_SEQUENTIAL_PACKING;
-	    cig_param_test.framing = WICED_BLE_ISOC_UNFRAMED;
+        cig_param_test.packing = WICED_BLE_ISOC_SEQUENTIAL_PACKING;
+        cig_param_test.framing = WICED_BLE_ISOC_UNFRAMED;
 
-	    cig_param_test.ft_c_to_p    = 2;
-	    cig_param_test.ft_p_to_c    = 2;
-	    cig_param_test.iso_interval = 8;
+        cig_param_test.ft_c_to_p    = 2;
+        cig_param_test.ft_p_to_c    = 2;
+        cig_param_test.iso_interval = 8;
 
-	    cig_param_test.p_cis_config_list = cis_config_list_test;
+        cig_param_test.p_cis_config_list = cis_config_list_test;
 
-	    for (index = 0; index < cig_param_test.cis_count; index++)
-	    {
-	        cig_param_test.p_cis_config_list[index].cis_id = index;
-	        cig_param_test.p_cis_config_list[index].nse    = 2;
+        for (index = 0; index < cig_param_test.cis_count; index++)
+        {
+            cig_param_test.p_cis_config_list[index].cis_id = index;
+            cig_param_test.p_cis_config_list[index].nse    = 2;
 
-	        cig_param_test.p_cis_config_list[index].max_sdu_c_to_p = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
-	        cig_param_test.p_cis_config_list[index].max_pdu_c_to_p = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;
-	        cig_param_test.p_cis_config_list[index].bn_c_to_p      = 1;
-	        cig_param_test.p_cis_config_list[index].phy_c_to_p     = WICED_BLE_ISOC_LE_2M_PHY;
+            cig_param_test.p_cis_config_list[index].max_sdu_c_to_p = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
+            cig_param_test.p_cis_config_list[index].max_pdu_c_to_p = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;
+            cig_param_test.p_cis_config_list[index].bn_c_to_p      = 1;
+            cig_param_test.p_cis_config_list[index].phy_c_to_p     = WICED_BLE_ISOC_LE_2M_PHY;
 
-	        cig_param_test.p_cis_config_list[index].max_sdu_p_to_c = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
-	        cig_param_test.p_cis_config_list[index].max_pdu_p_to_c = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
+            cig_param_test.p_cis_config_list[index].max_sdu_p_to_c = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
+            cig_param_test.p_cis_config_list[index].max_pdu_p_to_c = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;;
 
-	        cig_param_test.p_cis_config_list[index].phy_p_to_c     = WICED_BLE_ISOC_LE_2M_PHY;
-	        cig_param_test.p_cis_config_list[index].bn_p_to_c      = 1;
-	    }
-	    result = wiced_bt_isoc_central_set_cig_param_test(&cig_param_test, NULL);
+            cig_param_test.p_cis_config_list[index].phy_p_to_c     = WICED_BLE_ISOC_LE_2M_PHY;
+            cig_param_test.p_cis_config_list[index].bn_p_to_c      = 1;
+        }
+        result = wiced_bt_isoc_central_set_cig_param_test(&cig_param_test, NULL);
 
-	    printf("[%s] exit %d", __FUNCTION__, result);
+        printf("[%s] exit %d", __FUNCTION__, result);
 
-	    return result;
+        return result;
 }
 #else
 static wiced_result_t isoc_set_cig()
@@ -663,8 +663,8 @@ static void isoc_stats_timeout( WICED_TIMER_PARAM_TYPE param )
         APP_ISOC_TRACE("[ISOC STATS][%d] isoc_rx_count:%d isoc_tx_count:%d "
                        "isoc_tx_fail_count:%d isoc_tx_dropped_count:%d", i,
                        (int)isoc_rx_count[i], (int)isoc_tx_count[i],
-					   (int)isoc_tx_fail_count[i],
-					   (int)isoc_tx_dropped_count[i]);
+                       (int)isoc_tx_fail_count[i],
+                       (int)isoc_tx_dropped_count[i]);
     }
 }
 #endif
@@ -1000,10 +1000,10 @@ static void isoc_vse_cback(uint8_t len, uint8_t *p)
         APP_ISOC_TRACE("[ISOC_ERROR_DROPPED_SDU %02x] PSN: %d  Expected_PSN: %d"
                 "timestamp: %d  expected_ts: %d",
                 p_isoc_error_dropped_sdu_vse->connHandle,
-				(int)p_isoc_error_dropped_sdu_vse->psn,
-				(int)p_isoc_error_dropped_sdu_vse->expected_psn,
-				(int)p_isoc_error_dropped_sdu_vse->timestamp,
-				(int)p_isoc_error_dropped_sdu_vse->expected_timestamp);
+                (int)p_isoc_error_dropped_sdu_vse->psn,
+                (int)p_isoc_error_dropped_sdu_vse->expected_psn,
+                (int)p_isoc_error_dropped_sdu_vse->timestamp,
+                (int)p_isoc_error_dropped_sdu_vse->expected_timestamp);
 
         if ((index >= MAX_CIS_PER_CIG) || INVALID_INDEX(index))
         {

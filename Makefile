@@ -86,8 +86,8 @@ LED?=1
 # Set BUTTON to empty to disable button support
 BUTTON?=1
 
-# Set number of MAX_CONNECTED_DEVICES (peripherals) to be supported, 1 is the
-# only option for this release.
+# Set number of MAX_CONNECTED_DEVICES (peripherals) to be supported,
+# this release supports either 1 or 2
 # Also configures the # of CIS in the CIG
 MAX_CONNECTED_DEVICES?=1
 
