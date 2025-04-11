@@ -94,6 +94,7 @@ typedef struct
     uint16_t handle;        // CIS Handle
     uint16_t acl_handle;    // ACL Connection Handle for this CIS
     isoc_psn_info_t psn_info;
+
 } isoc_cis_info_t;
 
 typedef struct
@@ -147,6 +148,7 @@ static uint32_t isoc_tx_count[MAX_CIS_PER_CIG] = {0};
 static uint32_t isoc_tx_fail_count[MAX_CIS_PER_CIG] = {0};
 static uint32_t isoc_tx_dropped_count[MAX_CIS_PER_CIG] = {0};
 static wiced_timer_t iso_stats_timer;
+wiced_ble_isoc_data_path_direction_t dp_dir;
 
 
 /*******************************************************************************
@@ -497,9 +499,9 @@ CY_SECTION_RAMFUNC_END
 static wiced_result_t isoc_set_cig()
 {
     wiced_result_t                 result;
-        wiced_bt_ble_cis_config_test_t cis_config_list_test[MAX_CIS_PER_CIG];
-        wiced_bt_ble_cig_param_test_t  cig_param_test;
-        uint8_t                        index;
+    wiced_bt_ble_cis_config_test_t cis_config_list_test[MAX_CIS_PER_CIG];
+    wiced_ble_isoc_cig_param_test_t  cig_param_test;
+    uint8_t                        index;
 
         printf("[%s] cis_per_cig count %d \r\n", __FUNCTION__, MAX_CIS_PER_CIG);
 
@@ -508,7 +510,7 @@ static wiced_result_t isoc_set_cig()
 
         cig_param_test.sdu_interval_c_to_p       = ISO_SDU_INTERVAL;
         cig_param_test.sdu_interval_p_to_c       = ISO_SDU_INTERVAL;
-        cig_param_test.peripheral_clock_accuracy = 0;
+        cig_param_test.worst_case_sca = 0;
 
         cig_param_test.packing = WICED_BLE_ISOC_SEQUENTIAL_PACKING;
         cig_param_test.framing = WICED_BLE_ISOC_UNFRAMED;
@@ -535,7 +537,7 @@ static wiced_result_t isoc_set_cig()
             cig_param_test.p_cis_config_list[index].phy_p_to_c     = WICED_BLE_ISOC_LE_2M_PHY;
             cig_param_test.p_cis_config_list[index].bn_p_to_c      = 1;
         }
-        result = wiced_bt_isoc_central_set_cig_param_test(&cig_param_test, NULL);
+        result = wiced_ble_isoc_central_set_cig_param_test(&cig_param_test);
 
         printf("[%s] exit %d", __FUNCTION__, result);
 
@@ -548,8 +550,8 @@ static wiced_result_t isoc_set_cig()
 
     APP_ISOC_TRACE("[%s] cis_per_cig count %d ", __FUNCTION__, MAX_CIS_PER_CIG);
 
-    wiced_bt_ble_cis_config_t cis_config_list[MAX_CIS_PER_CIG];
-    wiced_bt_ble_cig_param_t cig_param;
+    wiced_ble_isoc_cis_config_t cis_config_list[MAX_CIS_PER_CIG];
+    wiced_ble_isoc_cig_param_t cig_param;
 
     uint8_t index;
 
@@ -565,7 +567,7 @@ static wiced_result_t isoc_set_cig()
          from the Peripheral for all the CISes in the CIG. */
     cig_param.sdu_interval_p_to_c = ISO_SDU_INTERVAL;
     /**< Peripheral Clock Accuracy */
-    cig_param.peripheral_clock_accuracy = 0;
+    cig_param.worst_case_sca = 0;
     /**< Maximum time, in microseconds, for an SDU to be transported
          from the Central Controller to Peripheral Controller */
     cig_param.max_trans_latency_c_to_p = 20;
@@ -606,7 +608,7 @@ static wiced_result_t isoc_set_cig()
              from the peripheral to central */
         cig_param.p_cis_config_list[index].rtn_p_to_c = 5/MAX_CIS_PER_CIG;
     }
-    result = wiced_bt_isoc_central_set_cig_param(&cig_param, NULL);
+    result = wiced_ble_isoc_central_set_cig_param(&cig_param);
 
     APP_ISOC_TRACE("[%s] exit %d", __FUNCTION__, result);
 
@@ -628,7 +630,7 @@ static void isoc_stop()
 
     wiced_stop_timer(&iso.isoc_send_data_timer);
 
-       wiced_stop_timer(&iso.isoc_keep_alive_timer);
+    wiced_stop_timer(&iso.isoc_keep_alive_timer);
 
 #ifdef ISOC_STATS
     wiced_stop_timer(&iso_stats_timer);
@@ -691,7 +693,7 @@ static void isoc_close(uint16_t cis_handle)
         {
             iso.CIG.cis[index].status = CIS_REMOVE;
 
-            if (!wiced_bt_isoc_remove_data_path(cis_handle, TRUE,
+            if (!wiced_ble_isoc_remove_data_path(cis_handle,
                                                 WICED_BLE_ISOC_DPD_OUTPUT_BIT))
             {
                 WICED_BT_TRACE("[%s] failed sending remove output data path"
@@ -699,7 +701,7 @@ static void isoc_close(uint16_t cis_handle)
                 return;
             }
 
-            if (!wiced_bt_isoc_remove_data_path(cis_handle, TRUE,
+            if (!wiced_ble_isoc_remove_data_path(cis_handle,
                                                 WICED_BLE_ISOC_DPD_INPUT_BIT))
             {
                 WICED_BT_TRACE("[%s] failed sending remove input data path"
@@ -734,17 +736,27 @@ static void isoc_close(uint16_t cis_handle)
  * Summary:
  *  This is the callback function for ISOC Management.
  ********************************************************************/
-static void isoc_management_cback(wiced_bt_isoc_event_t event,
-                                  wiced_bt_isoc_event_data_t *p_event_data)
+static void isoc_management_cback(wiced_ble_isoc_event_t event,
+                                    wiced_ble_isoc_event_data_t *p_event_data)
 {
-    uint8_t index;
+    uint8_t index = 0;
     wiced_result_t result;
-
+    wiced_ble_isoc_setup_data_path_info_t data_path_info =
+                {.isoc_conn_hdl = iso.CIG.cis[index].handle,
+                .data_path_dir = WICED_BLE_ISOC_DPD_OUTPUT,
+                .data_path_id = WICED_BLE_ISOC_DPID_HCI,
+                .controller_delay = 0,
+                .codec_id = {0,0,0,0,0},
+                .csc_length = 0,
+                .p_csc = NULL,
+                .p_app_ctx = &dp_dir,
+                };
+    wiced_ble_isoc_data_path_direction_t *p_dir = (wiced_ble_isoc_data_path_direction_t *)p_event_data->datapath.p_app_ctx;
     APP_ISOC_TRACE("[%s] %d", __FUNCTION__, event);
 
     switch (event)
     {
-        case WICED_BLE_ISOC_SET_CIG_CMD_COMPLETE:
+        case WICED_BLE_ISOC_SET_CIG_CMD_COMPLETE_EVT:
         {
             APP_ISOC_TRACE("WICED_BLE_ISOC_SET_CIG_CMD_COMPLETE");
             if (WICED_BT_SUCCESS != p_event_data->cig_status_data.status)
@@ -765,9 +777,6 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
                 p_event_data->cig_status_data.cis_connection_handle_list[index];
                 iso.CIG.cis[index].id = index;
                 iso.CIG.cis[index].status = CIS_CLOSED;
-                wiced_bt_isoc_update_cis_conn_handle(iso.CIG.id,
-                                                     iso.CIG.cis[index].id,
-                                                     iso.CIG.cis[index].handle);
 
                 APP_ISOC_TRACE("[%s] cig_id:%d, cis_id:%d, cis_handle:%d ",
                                __FUNCTION__, iso.CIG.id, iso.CIG.cis[index].id,
@@ -776,19 +785,19 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
         }
         break;
 
-        case WICED_BLE_ISOC_CIS_ESTABLISHED:
+        case WICED_BLE_ISOC_CIS_ESTABLISHED_EVT:
         {
             APP_ISOC_TRACE("WICED_BLE_ISOC_CIS_ESTABLISHED");
             index = find_index_by_cis_handle(
-                    p_event_data->cis_established_data.cis_conn_handle);
+                    p_event_data->cis_established_data.cis.cis_conn_handle);
             if (WICED_BT_SUCCESS != p_event_data->cis_established_data.status
                 || (index >= MAX_CIS_PER_CIG))
             {
                 WICED_BT_TRACE("[%s] CIS establishment Status failure %d"
                        "cis_handle:%d", __FUNCTION__,
                        p_event_data->cis_established_data.status,
-                       p_event_data->cis_established_data.cis_conn_handle);
-                isoc_close(p_event_data->cis_established_data.cis_conn_handle);
+                       p_event_data->cis_established_data.cis.cis_conn_handle);
+                isoc_close(p_event_data->cis_established_data.cis.cis_conn_handle);
                 return;
             }
 
@@ -796,34 +805,27 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
             APP_ISOC_TRACE("[%s] index %d, CIS %d handle %d established",
                            __FUNCTION__,index, iso.CIG.cis[index].id,
                            iso.CIG.cis[index].handle);
+
+            dp_dir = WICED_BLE_ISOC_DPD_OUTPUT;
+            data_path_info.data_path_dir = WICED_BLE_ISOC_DPD_OUTPUT;
 #if defined(CYW55572) || WICED_BTSTACK_VERSION_MINOR > 8
-            result = (wiced_result_t) wiced_bt_isoc_setup_data_path(
-                                                      iso.CIG.cis[index].handle,
-                                                      TRUE,
-                                                      WICED_BLE_ISOC_DPD_OUTPUT,
-                                                      WICED_BLE_ISOC_DPID_HCI,
-                                                      0,0,0);
+            result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #else
-            result = (wiced_result_t) wiced_bt_isoc_setup_data_path(
-                                          iso.CIG.cis[index].handle,
-                                          TRUE,
-                                          WICED_BLE_ISOC_DPD_OUTPUT,
-                                          WICED_BLE_ISOC_DPID_HCI,
-                                          0);
+            result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #endif
             APP_ISOC_TRACE("[%s] setup_data_path result=%d", __FUNCTION__,
                            result);
         }
         break;
 
-        case WICED_BLE_ISOC_CIS_DISCONNECTED:
+        case WICED_BLE_ISOC_CIS_DISCONNECTED_EVT:
             APP_ISOC_TRACE("** CIS Disconnected %d, reason %d",
-                           p_event_data->cis_disconnect.cis_conn_handle,
+                           p_event_data->cis_disconnect.cis.cis_conn_handle,
                            p_event_data->cis_disconnect.reason);
-            isoc_close(p_event_data->cis_disconnect.cis_conn_handle);
+            isoc_close(p_event_data->cis_disconnect.cis.cis_conn_handle);
             break;
 
-        case WICED_BLE_ISOC_DATA_PATH_SETUP:
+        case WICED_BLE_ISOC_DATA_PATH_SETUP_EVT:
             APP_ISOC_TRACE("WICED_BLE_ISOC_DATA_PATH_SETUP");
             index = find_index_by_cis_handle(p_event_data->datapath.conn_hdl);
             if (WICED_BT_SUCCESS != p_event_data->datapath.status
@@ -833,24 +835,21 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
                                __FUNCTION__, p_event_data->datapath.conn_hdl);
                 isoc_close(p_event_data->datapath.conn_hdl);
                 return;
-            }
-
+            }            
             APP_ISOC_TRACE("[%s] %d data_path_dir = %d ", __FUNCTION__,
                            p_event_data->datapath.conn_hdl,
-                           p_event_data->datapath.data_path_dir);
+                            *p_dir);
 
 
-            if(p_event_data->datapath.data_path_dir==WICED_BLE_ISOC_DPD_OUTPUT)
+            if(*p_dir==WICED_BLE_ISOC_DPD_OUTPUT)
             {
-                result = (wiced_result_t) wiced_bt_isoc_setup_data_path(
-                                          iso.CIG.cis[index].handle,
-                                          TRUE,
-                                          WICED_BLE_ISOC_DPD_INPUT,
-                                          WICED_BLE_ISOC_DPID_HCI,
+                dp_dir = WICED_BLE_ISOC_DPD_INPUT;
+                data_path_info.data_path_dir = WICED_BLE_ISOC_DPD_INPUT;
+
 #if defined(CYW55572) || WICED_BTSTACK_VERSION_MINOR > 8
-                                          0,0,0);
+                result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #else
-                                          0);
+                result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #endif
                 APP_ISOC_TRACE("[%s] setup_data_path result=%d", __FUNCTION__,
                                result);
@@ -866,7 +865,7 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
             }
             break;
 
-        case WICED_BLE_ISOC_DATA_PATH_REMOVED:
+        case WICED_BLE_ISOC_DATA_PATH_REMOVED_EVT:
             APP_ISOC_TRACE("WICED_BLE_ISOC_DATA_PATH_REMOVED");
             index = find_index_by_cis_handle(p_event_data->datapath.conn_hdl);
             if (WICED_BT_SUCCESS != p_event_data->datapath.status
@@ -877,13 +876,12 @@ static void isoc_management_cback(wiced_bt_isoc_event_t event,
             }
 
             APP_ISOC_TRACE("[%s] Datapath removed ", __FUNCTION__);
-            result = wiced_bt_isoc_disconnect_cis(
+            result = wiced_ble_isoc_disconnect_cis(
                     p_event_data->datapath.conn_hdl);
             APP_ISOC_TRACE("[%s] disconnect cis on DP removed %d", __FUNCTION__,
                            result);
             app_update_cis_handle(iso.CIG.cis[index].acl_handle, 0);
             isoc_close(p_event_data->datapath.conn_hdl);
-
             break;
 
        default:
@@ -1059,7 +1057,7 @@ void isoc_start(int index)
 wiced_result_t isoc_open(uint16_t acl_handle)
 {
     wiced_result_t result = WICED_ALREADY_INITIALIZED;
-    wiced_bt_isoc_create_cis_param_t cis_param;
+    wiced_ble_isoc_cis_acl_t cis_param;
     uint8_t index;
 
     APP_ISOC_TRACE("[%s] ACL Handle %d, isoc cis_count=%d",
@@ -1075,18 +1073,17 @@ wiced_result_t isoc_open(uint16_t acl_handle)
         }
     }
 
-    cis_param.cis_count = 1;
     for (index = 0; VALID_INDEX(index); index++)
     {
         if (iso.CIG.cis[index].status == CIS_CLOSED)
         {
             iso.CIG.cis[index].acl_handle = acl_handle;
             iso.CIG.cis[index].status = CIS_CREATE;
-            cis_param.acl_handle_list = &acl_handle;
-            cis_param.cis_handle_list = &iso.CIG.cis[index].handle;
+            cis_param.acl_conn_handle = acl_handle;
+            cis_param.cis_conn_handle = iso.CIG.cis[index].handle;
             led_blink(LED_RED, 0, 500);
 
-            result = wiced_bt_isoc_central_create_cis(&cis_param);
+            result = wiced_ble_isoc_central_create_cis(1,&cis_param);
             APP_ISOC_TRACE("[%s] index %d acl_handle %d cis_handle %d,"
                            "result=%d",__FUNCTION__, index, acl_handle,
                            iso.CIG.cis[index].handle, result);
@@ -1143,12 +1140,17 @@ void isoc_init(void)
 {
     APP_ISOC_TRACE("[%s] ", __FUNCTION__);
 
+    wiced_ble_isoc_cfg_t isoc_config = {
+        .max_bis =0,
+        .max_cis =1,
+    };
+
+    // Register ISOC management callback
+    wiced_ble_isoc_init(&isoc_config, &isoc_management_cback);
+
     // Init data handler module and register ISOC receive data handler
     iso_dhm_init(p_wiced_bt_cfg_settings->p_isoc_cfg,
                  isoc_send_data_num_complete_packets_evt, rx_handler);
-
-    // Register ISOC management callback
-    wiced_bt_isoc_register_cb(&isoc_management_cback);
 
     // Set to 2M phy
     wiced_bt_ble_phy_preferences_t phy_preferences = {0};

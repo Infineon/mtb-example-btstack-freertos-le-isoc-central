@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2025, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -33,6 +33,7 @@
 
 #include "app.h"
 #include "wiced_bt_trace.h"
+
 
 #include "app_terminal_trace.h"
 /******************************************************
@@ -75,7 +76,7 @@ static void app_le_scan_result_cback(wiced_bt_ble_scan_results_t *p_scan_result,
             {
                 // Check if device is paired
                 if (app_dev_get_link_key(p_scan_result->remote_bd_addr,
-                    &link_key) && (memcmp(p_scan_result->direct_bda,
+                    &link_key) && (memcmp(p_scan_result->remote_bd_addr,
                     dev_info()->local_addr, BD_ADDR_LEN) == 0))
                 {
 #ifdef ENABLE_BT_SPY_LOG

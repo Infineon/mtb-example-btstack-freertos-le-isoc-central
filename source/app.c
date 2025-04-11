@@ -293,17 +293,21 @@ void app_update_cis_handle(uint16_t acl_handle, uint16_t cis_handle)
 wiced_bool_t app_set_acl_conn_interval(uint16_t acl_handle, uint16_t interval)
 {
     uint8_t index;
-
+    wiced_bt_ble_pref_conn_params_t conn_param_t =
+    {   .conn_interval_min = interval,
+        .conn_interval_max = interval,
+        .conn_latency = 0,
+        .conn_supervision_timeout = (interval < 10) ?NON_ISOC_ACL_LINK_SUPERVISION_TIMEOUT :ISOC_ACL_LINK_SUPERVISION_TIMEOUT,
+        .min_ce_length = 0,
+        .max_ce_length = 0,
+    };
     if (app_get_index_by_acl_handle(acl_handle, &index))
     {
         if (conn[index].acl_conn_interval != interval)
         {
             WICED_BT_TRACE("ACL %d: Set connection interval to %d",
                            conn[index].acl_handle, interval);
-            wiced_bt_l2cap_update_ble_conn_params(conn[index].bdAddr, interval,
-                           interval, 0, interval < 10 ?
-                           NON_ISOC_ACL_LINK_SUPERVISION_TIMEOUT :
-                           ISOC_ACL_LINK_SUPERVISION_TIMEOUT);
+            wiced_bt_l2cap_update_ble_conn_params(conn[index].bdAddr,&conn_param_t);
             return TRUE;
         }else
         {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2025, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -140,7 +140,7 @@ wiced_bool_t iso_dhm_process_num_completed_pkts(uint8_t *p_buf)
         // WICED_BT_TRACE("[%s] handle 0x%x num_sent %d", __FUNCTION__, handle, num_sent);
 
         //validate handle
-        if (wiced_bt_isoc_is_cis_connected_by_conn_id(handle) || wiced_bt_isoc_is_bis_created(handle))
+        if (wiced_ble_isoc_is_cis_connected_with_conn_hdl(handle) || wiced_ble_isoc_is_bis_created(handle))
         {
             //callback to app to send more packets
             if (g_num_complete_cb) {
@@ -159,7 +159,7 @@ void iso_dhm_init(const wiced_bt_cfg_isoc_t *p_isoc_cfg,
                   iso_dhm_num_complete_evt_cb_t num_complete_cb,
                   iso_dhm_rx_evt_cb_t rx_data_cb)
 {
-    wiced_bt_isoc_register_data_cb(iso_dhm_process_rx_data, iso_dhm_process_num_completed_pkts);
+    wiced_ble_isoc_register_data_cb(iso_dhm_process_rx_data, iso_dhm_process_num_completed_pkts);
 
     int buff_size =
         (p_isoc_cfg->max_sdu_size * p_isoc_cfg->channel_count) + ISO_LOAD_HEADER_SIZE_WITH_TS + ISO_DATA_HEADER_SIZE;
@@ -208,7 +208,7 @@ wiced_bool_t iso_dhm_send_packet(uint16_t psn,
     uint8_t *p_iso_sdu = NULL;
     uint16_t handle_and_flags = conn_handle;
     uint16_t data_load_length = 0;
-//    uint16_t psn = 0xFFFF;
+//  uint16_t psn = 0xFFFF;
 
     wiced_bool_t result = WICED_FALSE;
 
@@ -246,7 +246,7 @@ wiced_bool_t iso_dhm_send_packet(uint16_t psn,
     UINT16_TO_STREAM(p, data_buf_len);
 
     //result = btu_write_iso_to_lower(BT_TRANSPORT_LE, p_iso_sdu, data_load_length + ISO_DATA_HEADER_SIZE);
-    result = wiced_bt_write_iso_data_to_lower(p_iso_sdu, data_load_length + ISO_DATA_HEADER_SIZE);
+    result = wiced_ble_isoc_write_data_to_lower(p_iso_sdu, data_load_length + ISO_DATA_HEADER_SIZE);
 
     //TRACE_RES_5(1);
     iso_dhm_free_data_buffer(p_data_buf);
@@ -254,7 +254,6 @@ wiced_bool_t iso_dhm_send_packet(uint16_t psn,
 
     //TRACE_SEND_PKT(0);
     //TRACE_RX_ISR(0);
-
     return result;
 }
 CY_SECTION_RAMFUNC_END
