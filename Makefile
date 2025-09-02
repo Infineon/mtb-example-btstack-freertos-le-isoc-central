@@ -107,8 +107,8 @@ MAX_CONNECTED_DEVICES?=1
 #
 
 # Like COMPONENTS, but disable optional code that was enabled by default.
-DISABLE_COMPONENTS=BTFW-TX10
-COMPONENTS=FREERTOS WICED_BLE BTFW-ISOC-TX10  iso_data_handler_module_lib gatt_utils_lib nvram_lib
+DISABLE_COMPONENTS=
+COMPONENTS=FREERTOS WICED_BLE BTFW-TX10  iso_data_handler_module_lib gatt_utils_lib nvram_lib
 
 
 # By default the build system automatically looks in the Makefile's directory

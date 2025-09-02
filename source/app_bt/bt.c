@@ -91,7 +91,6 @@ wiced_bt_device_address_t dev_addr = {0x12, 0x34, 0x56, 0x78, 0x90, 0x00};
  *     Private Functions
  ******************************************************************************/
 
-extern void btm_set_ce_len(uint16_t min_ce, uint16_t max_ce);
 /*
  *  Management callback receives various notifications from the stack
  */
@@ -124,7 +123,6 @@ static wiced_result_t app_bt_management( wiced_bt_management_evt_t event,
 #endif
                 WICED_BT_TRACE("BTM initialized");
 
-                btm_set_ce_len(2,2);
                 wiced_bt_set_local_bdaddr (dev_addr, BLE_ADDR_PUBLIC);
 
                 /* read extended device info */
