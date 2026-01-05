@@ -694,7 +694,7 @@ static void isoc_close(uint16_t cis_handle)
             iso.CIG.cis[index].status = CIS_REMOVE;
 
             if (!wiced_ble_isoc_remove_data_path(cis_handle,
-                                                WICED_BLE_ISOC_DPD_OUTPUT_BIT))
+                                                WICED_BLE_ISOC_DPD_OUTPUT_BIT, NULL))
             {
                 WICED_BT_TRACE("[%s] failed sending remove output data path"
                                "command", __FUNCTION__);
@@ -702,7 +702,7 @@ static void isoc_close(uint16_t cis_handle)
             }
 
             if (!wiced_ble_isoc_remove_data_path(cis_handle,
-                                                WICED_BLE_ISOC_DPD_INPUT_BIT))
+                                                WICED_BLE_ISOC_DPD_INPUT_BIT, NULL))
             {
                 WICED_BT_TRACE("[%s] failed sending remove input data path"
                                "command", __FUNCTION__);
