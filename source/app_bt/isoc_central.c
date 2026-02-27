@@ -17,6 +17,7 @@
 #include "app.h"
 
 #include "app_terminal_trace.h"
+#include "cyabs_rtos.h"
 /******************************************************************************
  *  defines
  ******************************************************************************/
@@ -32,10 +33,9 @@
 #endif
 
 #define ISO_MAX_CIG                         1
-#define ISOC_MAX_BURST_COUNT                4      // Must be >= 1
-
+#define ISOC_MAX_BURST_COUNT                1      // Must be >= 1
+#define CIS_QUEUE_LEN                       (10)
 #define ISO_SDU_INTERVAL                    10000 //sdu interval in micro-second
-#define ISOC_TIMEOUT_IN_MSECONDS            ISO_SDU_INTERVAL / 1000
 //4 minute keep alive timer to ensure app and controller psn stays synchronized
 #define ISOC_KEEP_ALIVE_TIMEOUT_IN_SECONDS  120
 
@@ -73,43 +73,30 @@ enum
     CIS_OPEN,
 };
 
-
-typedef enum
-{
-    SN_IDLE,
-    SN_PENDING,
-    SN_VALID,
-} sequence_number_state_e;
-
-typedef struct
-{
-    sequence_number_state_e state;
-    uint16_t sequence_number;
-} isoc_psn_info_t;
-
 typedef struct
 {
     uint8_t  status;
     uint8_t  id;            // CIS ID
     uint16_t handle;        // CIS Handle
     uint16_t acl_handle;    // ACL Connection Handle for this CIS
-    isoc_psn_info_t psn_info;
-
+    uint16_t psn;
+    uint8_t credits;
+    QueueHandle_t   m_q;
+    SemaphoreHandle_t m_mtx;
 } isoc_cis_info_t;
 
 typedef struct
 {
     uint8_t  id;            // CIG ID
     uint8_t  cis_count;     // CIS count
-    isoc_cis_info_t cis[MAX_CIS_PER_CIG];
+    isoc_cis_info_t cis[MAX_CIS_PER_CIG];    
 } isoc_cig_info_t;
 
 typedef struct
 {
     uint16_t interval;      // ISO_interval
     uint8_t  cig_count;     // CIG count
-    wiced_timer_t isoc_send_data_timer;
-    wiced_timer_t isoc_keep_alive_timer;
+    wiced_timer_t isoc_keep_alive_timer[MAX_CIS_PER_CIG];
     isoc_cig_info_t cig[ISO_MAX_CIG];
 } isoc_info_t;
 
@@ -124,23 +111,19 @@ typedef struct
 } peripheral_button_state_type_t;
 #pragma pack()
 
-#pragma pack(1)
-typedef struct
-{
-    uint16_t    cis_conn_handle;
-    uint16_t    iso_payload_len;
-    uint8_t     iso_payload[ISO_SDU_SIZE];
-} iso_tx_packet_t;
-#pragma pack()
-
-iso_tx_packet_t isoc_tx_buffer[MAX_CIS_PER_CIG];
-
-static uint16_t iso_sdu_count = 0;
-static wiced_bool_t pressed_saved;
+typedef enum {
+    BTN_PRESSED,      // btn is pressed
+    BTN_RELEASED,     // btn is released
+    DUMMY             // need to send an empty to maintain PSN in BTSS
+}tISOC_DATA_TYPE;
+// after the button is pressed, ISOC_MAX_BURST_COUNT packets
+// will be sent
+static uint16_t iso_sdu_count[MAX_CIS_PER_CIG] = {0};
 uint8_t isoc_teardown_pending = 0;
 
-#define CONTROLLER_ISO_DATA_PACKET_BUFS   8
-static uint8_t number_of_iso_data_packet_bufs = CONTROLLER_ISO_DATA_PACKET_BUFS;
+const uint16_t ISOC_START_HDL_VALUE = 0x60;
+const int CONTROLLER_ISO_DATA_PACKET_BUFS = 6;
+#define CREDITS_PER_CIS (CONTROLLER_ISO_DATA_PACKET_BUFS / MAX_CIS_PER_CIG)
 
 // ISOC stats counters
 static uint32_t isoc_rx_count[MAX_CIS_PER_CIG] = {0};
@@ -149,7 +132,10 @@ static uint32_t isoc_tx_fail_count[MAX_CIS_PER_CIG] = {0};
 static uint32_t isoc_tx_dropped_count[MAX_CIS_PER_CIG] = {0};
 static wiced_timer_t iso_stats_timer;
 wiced_ble_isoc_data_path_direction_t dp_dir;
-
+static void isoc_send_data_payload(bool from_tx_cmplt, const uint8_t index, uint8_t pressed );
+void start_read_psn_using_vsc(uint16_t hdl);
+void app_send_dummy(uint16_t handle);
+bool is_tx_in_progress(const int idx);
 
 /*******************************************************************************
  * Macros
@@ -157,140 +143,54 @@ wiced_ble_isoc_data_path_direction_t dp_dir;
 #define VALID_INDEX(i)  (i < iso.CIG.cis_count)
 #define INVALID_INDEX(i) (i >= iso.CIG.cis_count)
 #define CIG cig[0]          // we only support one cig for this app
-#define isoc_acl_handle(i) iso.CIG.cis[i].acl_handle
-#define cis_ status iso.CIG.cis[index].status
-
 
 /*******************************************************************************
  * private functions
  ******************************************************************************/
-static void isoc_send_null_payload(void);
-static void isoc_get_psn_start( WICED_TIMER_PARAM_TYPE param );
-static void isoc_set_psn_idle(void);
-static wiced_bool_t isoc_is_psn_valid(void);
+
+void append_button_status(int idx, uint8_t data)
+{
+   xSemaphoreTake(iso.CIG.cis[idx].m_mtx, 3);
+   if(uxQueueSpacesAvailable(iso.CIG.cis[idx].m_q))
+   {
+       xQueueSend( iso.CIG.cis[idx].m_q, &data, 0);
+   }
+   xSemaphoreGive(iso.CIG.cis[idx].m_mtx);
+}
+
+// caller should make sure there is data in queue
+uint8_t get_button_status(int idx, bool pop)
+{
+   uint8_t data = DUMMY;
+   xSemaphoreTake(iso.CIG.cis[idx].m_mtx, 3);
+   if(pop)
+   {
+        xQueueReceive( iso.CIG.cis[idx].m_q, &data, 3);
+   }else{
+        xQueuePeek( iso.CIG.cis[idx].m_q, &data, 0);
+   }
+   
+   xSemaphoreGive(iso.CIG.cis[idx].m_mtx);
+
+   return data;
+}
+
+bool is_queue_empty(int idx)
+{
+   bool v;
+
+   xSemaphoreTake(iso.CIG.cis[idx].m_mtx, 3);
+  
+   v = (CIS_QUEUE_LEN == uxQueueSpacesAvailable(iso.CIG.cis[idx].m_q));
+   
+   xSemaphoreGive(iso.CIG.cis[idx].m_mtx);
+
+   //printf("[%d] Q available %d\n", idx, ret& 0x0FF);
+   return v;
+}
 
 static int find_index_by_cis_handle(uint16_t cis_handle);
 
-#define  VSC_0XFDFA
-#ifdef VSC_0XFDFA
-#pragma pack( push, 1 )
-typedef struct {
-    uint8_t status;
-    uint16_t connHandle;
-    uint16_t packetSeqNum;
-    uint32_t timeStamp;
-    uint8_t  timeOffset[3];
-}tREAD_PSN_EVT;
-#pragma pack( pop )
-
-static void read_psn_cb(wiced_bt_dev_vendor_specific_command_complete_params_t
-                        *p_command_complete_params)
-{
-    tREAD_PSN_EVT * evt =
-            (tREAD_PSN_EVT *)p_command_complete_params->p_param_buf;
-    uint8_t index = find_index_by_cis_handle(evt->connHandle);
-    int toffset = evt->timeOffset[0];
-
-    toffset |= (evt->timeOffset[1] & 0x0ff)<<8;
-    toffset |= (evt->timeOffset[2] & 0x0ff)<< 16;
-
-    APP_ISOC_TRACE("[%s] status:%d handle:0x%x psn=%d timestamp:%d"
-                   "time_offset:%d\n",
-                   __FUNCTION__,evt->status & 0x0FF,
-                   evt->connHandle& 0x0FFFF, evt->packetSeqNum& 0x0FFFF,
-                   (int)evt->timeStamp, toffset);
-
-    if ((index >= MAX_CIS_PER_CIG) || INVALID_INDEX(index))
-    {
-        APP_ISOC_TRACE("[%s] Invalid cis_handle %d", __FUNCTION__,
-                       evt->connHandle);
-        return;
-    }
-
-    if(evt->status != 0)
-    {
-        APP_ISOC_TRACE("[%s] status %d", __FUNCTION__, evt->status);
-        iso.CIG.cis[index].psn_info.state = SN_IDLE;
-        return;
-    }
-
-    if( iso.CIG.cis[index].psn_info.state != SN_PENDING )
-        return;
-
-    // If initial transmission, no need to increment
-    if( evt->packetSeqNum == 0 )
-        iso.CIG.cis[index].psn_info.sequence_number = evt->packetSeqNum;
-    else
-        iso.CIG.cis[index].psn_info.sequence_number = evt->packetSeqNum + 2;
-
-    iso.CIG.cis[index].psn_info.state = SN_VALID;
-
-    // Send NULL payload if the idle timer is running
-    if( wiced_is_timer_in_use(&iso.isoc_keep_alive_timer) )
-    {
-        isoc_send_null_payload();
-    }
-}
-
-#define READ_PSN_VSC_OPCODE   (0xFDFA)
-void start_read_psn_using_vsc(uint16_t hdl)
-{
-    wiced_bt_dev_vendor_specific_command (READ_PSN_VSC_OPCODE, 2,
-                                          (uint8_t *)&hdl,read_psn_cb);
-}
-
-#else
-/***************************************************************************
- * Function Name: isoc_read_tx_sync_complete_cback
- ***************************************************************************
- * Summary:
- *
- ***************************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static void isoc_read_tx_sync_complete_cback(
-                    wiced_bt_isoc_read_tx_sync_complete_t
-                    *p_event_data)
-{
-    uint8_t index = find_index_by_cis_handle(p_event_data->conn_hdl);
-
-    APP_ISOC_TRACE("[%s] status:%d handle:0x%x psn=%d timestamp:%d"
-                   "time_offset:%d",__FUNCTION__,p_event_data->status,
-                   p_event_data->conn_hdl,p_event_data->psn,
-                   p_event_data->tx_timestamp,p_event_data->time_offset);
-
-    if(p_event_data->status != 0)
-    {
-        APP_ISOC_TRACE("[%s] status %d", __FUNCTION__, p_event_data->status);
-        iso.CIG.cis[0].psn_info.state = SN_IDLE;
-        return;
-    }
-
-    if ((index >= MAX_CIS_PER_CIG) || INVALID_INDEX(index))
-    {
-        APP_ISOC_TRACE("[%s] Invalid cis_handle %d", __FUNCTION__,
-                       p_event_data->conn_hdl);
-        return;
-    }
-
-    if( iso.CIG.cis[index].psn_info.state != SN_PENDING )
-        return;
-
-    // If initial transmission, no need to increment
-    if( p_event_data->psn == 0 )
-        iso.CIG.cis[index].psn_info.sequence_number = p_event_data->psn;
-    else
-        iso.CIG.cis[index].psn_info.sequence_number = p_event_data->psn + 2;
-
-    iso.CIG.cis[index].psn_info.state = SN_VALID;
-
-    // Send NULL payload if the idle timer is running
-    if( wiced_is_timer_in_use(&iso.isoc_keep_alive_timer) )
-    {
-        isoc_send_null_payload();
-    }
-}
-CY_SECTION_RAMFUNC_END
-#endif
 /***************************************************************************
  * Function Name: find_index_by_cis_handle
  ***************************************************************************
@@ -313,144 +213,82 @@ static int find_index_by_cis_handle(uint16_t cis_handle)
 }
 CY_SECTION_RAMFUNC_END
 
-/********************************************************************
- * Function Name: isoc_send_null_payload
- ********************************************************************
- * Summary:
- *
- ********************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static void isoc_send_null_payload(void)
-{
-    wiced_bool_t result;
-    uint8_t* p_buf = NULL;
-
-    for(uint8_t i=0; i<MAX_CIS_PER_CIG; i++)
-    {
-        if( iso.CIG.cis[i].psn_info.state == SN_VALID )
-        {
-            // Allocate buffer for ISOC header
-            if((p_buf = iso_dhm_get_data_buffer()) != NULL)
-            {
-                result = iso_dhm_send_packet(
-                        iso.CIG.cis[i].psn_info.sequence_number,
-                        iso.CIG.cis[i].handle, WICED_FALSE, p_buf, 0);
-
-                APP_ISOC_TRACE("[%s] sent null payload handle %02x result %d",
-                               __FUNCTION__, iso.CIG.cis[i].handle, result);
-
-                // Set PSN state back to idle
-                iso.CIG.cis[i].psn_info.state = SN_IDLE;
-            }
-        }
-    }
-    wiced_start_timer(&iso.isoc_keep_alive_timer,
-                          ISOC_KEEP_ALIVE_TIMEOUT_IN_SECONDS);
-}
-CY_SECTION_RAMFUNC_END
-
 void app_send_dummy(uint16_t handle)
 {
+    int i = handle - ISOC_START_HDL_VALUE;
+ 
+   if(!is_tx_in_progress(i))
+    {
+        printf("CIS[%d] skip app_send_dummy\n", i);
+        return;
+    }
     uint8_t* p_buf = iso_dhm_get_data_buffer();
-    int i = handle - 0x60;
-    iso_dhm_send_packet(iso.CIG.cis[i].psn_info.sequence_number,
+    iso.CIG.cis[i].credits--;
+    printf("CIS[%d] app_send_dummy credits %d\n", i, iso.CIG.cis[i].credits);
+    iso_dhm_send_packet(iso.CIG.cis[i].psn,
                         iso.CIG.cis[i].handle, WICED_FALSE, p_buf, 0);
 }
 
+// is packet in controller?
+bool is_tx_in_progress(const int idx)
+{
+    return iso.CIG.cis[idx].credits == CREDITS_PER_CIS;
+}
 /********************************************************************
  * Function Name: isoc_send_data_payload
  ********************************************************************
  * Summary:
- *  Helper function for isoc_send_data_handler
+ *  Helper function for isoc_send_data_payload
  ********************************************************************/
 CY_SECTION_RAMFUNC_BEGIN
-static void isoc_send_data_payload( uint8_t index )
+static void isoc_send_data_payload(bool from_tx_cmplt, const uint8_t index, uint8_t pressed)
 {
     uint8_t result;
     uint32_t data_length;
     uint8_t* p_buf = NULL;
-    uint8_t* p_data = NULL;
-    uint8_t pressed = pressed_saved;
+    uint8_t* p_data = NULL;    
 
+    // increase the packet count to send
+    // if it is call from tx complete call back. there is no need to 
+    // increase pending number.
+    if(!from_tx_cmplt)
+    {
+        append_button_status(index, pressed);
+        if(!is_tx_in_progress(index))
+        {
+            printf("CIS[%d] increase pending only\n", index);        
+            return;
+        }
+    }
     if((p_buf = iso_dhm_get_data_buffer()) != NULL)
     {
         p_data = p_buf;
 
         UINT16_TO_STREAM(p_data, iso.CIG.cis[index].handle);
-        UINT16_TO_STREAM(p_data, iso.CIG.cis[index].psn_info.sequence_number);
+        UINT16_TO_STREAM(p_data, iso.CIG.cis[index].psn);
         UINT8_TO_STREAM(p_data, pressed);
 
-#if 0  // Normally you would only send the required payload but here we want to
-       // exercise the max_sdu_size to stress the system more
-        data_length = p_data - p_buf;
-#else
-        data_length = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;
-#endif
-
-        result=iso_dhm_send_packet(iso.CIG.cis[index].psn_info.sequence_number,
+        data_length = p_wiced_bt_cfg_settings->p_isoc_cfg->max_sdu_size;        
+        iso.CIG.cis[index].credits--;
+        printf("CIS[%d] isoc_send_data_payload credits %d\n", index, iso.CIG.cis[index].credits);
+       
+        result=iso_dhm_send_packet(iso.CIG.cis[index].psn,
                                    iso.CIG.cis[index].handle, WICED_FALSE,
                                    p_buf, data_length);
 
         if(result)
         {
-            number_of_iso_data_packet_bufs--;
-            isoc_tx_count[index]++;
+            isoc_tx_count[index]++;            
         }
         else
         {
             isoc_tx_fail_count[index]++;
         }
 
-        APP_ISOC_TRACE("[isoc_send_data_handler] handle:0x%x SN:%d data_length:"
-                       "%d sdu_count:%d result:%d", iso.CIG.cis[index].handle,
-                       iso.CIG.cis[index].psn_info.sequence_number, (int)data_length,
-                       (int)iso_sdu_count, result);
-    }
-}
-CY_SECTION_RAMFUNC_END
-
-/********************************************************************
- * Function Name: isoc_send_data_handler
- ********************************************************************
- * Summary:
- *  Updates the send buffer and submits data to the controller
- ********************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static void isoc_send_data_handler( WICED_TIMER_PARAM_TYPE param )
-{
-    if( !isoc_is_psn_valid() )
-        return;
-
-    for(uint8_t i=0; i<MAX_CIS_PER_CIG; i++)
-    {
-        if(number_of_iso_data_packet_bufs)
-        {
-            isoc_send_data_payload(i);
-        }
-        else
-        {
-            // No buffer to send data
-            isoc_tx_dropped_count[i]++;
-        }
-
-        // Increment the sequence number
-        iso.CIG.cis[i].psn_info.sequence_number++;
-    }
-
-    iso_sdu_count--;
-
-    if(iso_sdu_count == 0)
-    {
-        // Stop the send data timer if no more data to send
-        wiced_stop_timer(&iso.isoc_send_data_timer);
-
-        isoc_set_psn_idle();
-
-        // Start keep alive timer
-        wiced_start_timer(&iso.isoc_keep_alive_timer,
-                          ISOC_KEEP_ALIVE_TIMEOUT_IN_SECONDS);
-
-        APP_ISOC_TRACE("Started keep alive timer");
+        APP_ISOC_TRACE("[isoc_send_data_payload] handle:0x%x SN:%d data_length:"
+                       "%d sdu_count:%d result:%d\n", iso.CIG.cis[index].handle,
+                       iso.CIG.cis[index].psn, (int)data_length,
+                       (int)iso_sdu_count[index], result);
     }
 }
 CY_SECTION_RAMFUNC_END
@@ -475,7 +313,7 @@ static void rx_handler(uint16_t cis_handle, uint8_t *p_data, uint32_t length)
     {
             set_gpio_high(C_ACTION);
 
-            APP_ISOC_TRACE("[rx_data] cis_id:0x%x SN:%d button_state:%d",
+            APP_ISOC_TRACE("[rx_data][%x] cis_id:0x%x SN:%d button_state:%d", cis_handle,
                            p_rx_data->cis_id, p_rx_data->sequence_num,
                            p_rx_data->button_state);
             isoc_rx_count[index]++;
@@ -515,8 +353,8 @@ static wiced_result_t isoc_set_cig()
         cig_param_test.packing = WICED_BLE_ISOC_SEQUENTIAL_PACKING;
         cig_param_test.framing = WICED_BLE_ISOC_UNFRAMED;
 
-        cig_param_test.ft_c_to_p    = 2;
-        cig_param_test.ft_p_to_c    = 2;
+        cig_param_test.ft_c_to_p    = 1;
+        cig_param_test.ft_p_to_c    = 1;
         cig_param_test.iso_interval = 8;
 
         cig_param_test.p_cis_config_list = cis_config_list_test;
@@ -539,7 +377,7 @@ static wiced_result_t isoc_set_cig()
         }
         result = wiced_ble_isoc_central_set_cig_param_test(&cig_param_test);
 
-        printf("[%s] exit %d", __FUNCTION__, result);
+        printf("[%s] exit %d\n", __FUNCTION__, result);
 
         return result;
 }
@@ -628,10 +466,10 @@ static void isoc_stop()
     led_blink_stop(LED_RED);
     isoc_cis_connected() ? led_on(LED_RED) : led_off(LED_RED);
 
-    wiced_stop_timer(&iso.isoc_send_data_timer);
-
-    wiced_stop_timer(&iso.isoc_keep_alive_timer);
-
+    for(int i = 0; i< MAX_CIS_PER_CIG; i++)
+    {
+        wiced_stop_timer(&iso.isoc_keep_alive_timer[i]);
+    }
 #ifdef ISOC_STATS
     wiced_stop_timer(&iso_stats_timer);
 #endif
@@ -722,6 +560,7 @@ static void isoc_close(uint16_t cis_handle)
                                           NON_ISOC_ACL_CONN_INTERVAL);
                 iso.CIG.cis[index].acl_handle = 0;
 
+                 xQueueReset(iso.CIG.cis[index].m_q);
                 if(isoc_teardown_pending)
                     isoc_teardown_pending--;
             }
@@ -808,13 +647,14 @@ static void isoc_management_cback(wiced_ble_isoc_event_t event,
 
             dp_dir = WICED_BLE_ISOC_DPD_OUTPUT;
             data_path_info.data_path_dir = WICED_BLE_ISOC_DPD_OUTPUT;
+            data_path_info.isoc_conn_hdl = p_event_data->cis_established_data.cis.cis_conn_handle;
 #if defined(CYW55572) || WICED_BTSTACK_VERSION_MINOR > 8
             result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #else
             result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #endif
-            APP_ISOC_TRACE("[%s] setup_data_path result=%d", __FUNCTION__,
-                           result);
+            APP_ISOC_TRACE("[%s] setup_data_path [OUT] result=%d, hdl %d", __FUNCTION__,
+                           result, data_path_info.isoc_conn_hdl);
         }
         break;
 
@@ -845,14 +685,15 @@ static void isoc_management_cback(wiced_ble_isoc_event_t event,
             {
                 dp_dir = WICED_BLE_ISOC_DPD_INPUT;
                 data_path_info.data_path_dir = WICED_BLE_ISOC_DPD_INPUT;
+                data_path_info.isoc_conn_hdl = p_event_data->datapath.conn_hdl;
 
 #if defined(CYW55572) || WICED_BTSTACK_VERSION_MINOR > 8
                 result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #else
                 result = (wiced_result_t) wiced_ble_isoc_setup_data_path(&data_path_info);
 #endif
-                APP_ISOC_TRACE("[%s] setup_data_path result=%d", __FUNCTION__,
-                               result);
+                APP_ISOC_TRACE("[%s] setup_data_path [IN] result=%d, hdl %d", __FUNCTION__,
+                               result, data_path_info.isoc_conn_hdl);
             }
             else
             {
@@ -893,70 +734,6 @@ static void isoc_management_cback(wiced_ble_isoc_event_t event,
 }
 
 /********************************************************************
- * Function Name: isoc_is_psn_valid
- ********************************************************************
- * Summary:
- *
- *******************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static wiced_bool_t isoc_is_psn_valid(void)
-{
-    for(uint8_t i=0; i<MAX_CIS_PER_CIG; i++)
-    {
-        if( iso.CIG.cis[i].psn_info.state != SN_VALID )
-        {
-            return WICED_FALSE;
-        }
-    }
-    return WICED_TRUE;
-}
-CY_SECTION_RAMFUNC_END
-
-/********************************************************************
- * Function Name: isoc_set_psn_idle
- ********************************************************************
- * Summary:
- *
- *******************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static void isoc_set_psn_idle(void)
-{
-    for(uint8_t i=0; i<MAX_CIS_PER_CIG; i++)
-    {
-        iso.CIG.cis[i].psn_info.state = SN_IDLE;
-    }
-}
-CY_SECTION_RAMFUNC_END
-
-/********************************************************************
- * Function Name: isoc_get_psn_start
- ********************************************************************
- * Summary:
- * Returns the PSN start value for the current transmission packet.
- *******************************************************************/
-CY_SECTION_RAMFUNC_BEGIN
-static void isoc_get_psn_start(WICED_TIMER_PARAM_TYPE param)
-{
-    for(uint8_t i=0; i<MAX_CIS_PER_CIG; i++)
-    {
-        if( iso.CIG.cis[i].psn_info.state == SN_IDLE && iso.CIG.cis[i].handle)
-        {
-            APP_ISOC_TRACE("[%s] sending HCI_BLE_ISOC_READ_TX_SYNC for handle"
-                           "%02x", __FUNCTION__, iso.CIG.cis[i].handle);
-#ifndef VSC_0XFDFA
-            wiced_bt_isoc_read_tx_sync(iso.CIG.cis[i].handle, WICED_TRUE,
-                                       isoc_read_tx_sync_complete_cback);
-#else
-            start_read_psn_using_vsc(iso.CIG.cis[i].handle);
-#endif
-            iso.CIG.cis[i].psn_info.state = SN_PENDING;
-        }
-    }
-}
-CY_SECTION_RAMFUNC_END
-
-
-/********************************************************************
  * Function Name: isoc_send_data_num_complete_packets_evt
  ********************************************************************
  * Summary:
@@ -966,9 +743,25 @@ CY_SECTION_RAMFUNC_BEGIN
 static void isoc_send_data_num_complete_packets_evt(uint16_t cis_handle,
                                                     uint16_t num_sent)
 {
-    number_of_iso_data_packet_bufs += num_sent;
-    wiced_start_timer(&iso.isoc_keep_alive_timer,
-                      ISOC_KEEP_ALIVE_TIMEOUT_IN_SECONDS);
+    int index = cis_handle - ISOC_START_HDL_VALUE;
+    iso.CIG.cis[index].credits += num_sent;
+    APP_ISOC_TRACE("[%d] cmplt, credist %d/%d, num %d\n", index, iso.CIG.cis[index].credits, CREDITS_PER_CIS, num_sent);
+
+    if(!is_queue_empty(index))
+    {
+         uint8_t data = get_button_status(index, true);
+         if(data == DUMMY)
+         {
+            APP_ISOC_TRACE("[%d] send dummy for IDLE\n", index);
+            app_send_dummy(cis_handle);
+         }else
+         {
+            isoc_send_data_payload(true, index, data);
+         }
+    }else {
+         APP_ISOC_TRACE("[%d] start idle timer\n", index);
+         wiced_start_timer(&iso.isoc_keep_alive_timer[index], ISOC_KEEP_ALIVE_TIMEOUT_IN_SECONDS);
+    }
 }
 CY_SECTION_RAMFUNC_END
 
@@ -996,7 +789,7 @@ static void isoc_vse_cback(uint8_t len, uint8_t *p)
                p_isoc_error_dropped_sdu_vse->connHandle);
 
         APP_ISOC_TRACE("[ISOC_ERROR_DROPPED_SDU %02x] PSN: %d  Expected_PSN: %d"
-                "timestamp: %d  expected_ts: %d",
+                "timestamp: %d  expected_ts: %d\n",
                 p_isoc_error_dropped_sdu_vse->connHandle,
                 (int)p_isoc_error_dropped_sdu_vse->psn,
                 (int)p_isoc_error_dropped_sdu_vse->expected_psn,
@@ -1011,17 +804,8 @@ static void isoc_vse_cback(uint8_t len, uint8_t *p)
         }
 
         // Set sequence number to next expected PSN
-        iso.CIG.cis[index].psn_info.sequence_number =
+        iso.CIG.cis[index].psn =
                 p_isoc_error_dropped_sdu_vse->expected_psn + 1;
-
-        if (wiced_is_timer_in_use(&iso.isoc_keep_alive_timer))
-        {
-            // idle packet is failed. so send it again
-            app_send_dummy(p_isoc_error_dropped_sdu_vse->connHandle);
-        }else
-        {
-            isoc_tx_count[index]--;
-        }
     }
 }
 #endif // ISOC_MONITOR_FOR_DROPPED_SDUs
@@ -1105,30 +889,35 @@ wiced_result_t isoc_open(uint16_t acl_handle)
 CY_SECTION_RAMFUNC_BEGIN
 void isoc_send_data(wiced_bool_t c)
 {
-    // save button state
-    pressed_saved = c;
-
     // start to burst out data
-    iso_sdu_count += ISOC_MAX_BURST_COUNT;
-
-    // stop keep alive timer if it is running
-    if (wiced_is_timer_in_use(&iso.isoc_keep_alive_timer))
+    for(int i = 0; i < MAX_CIS_PER_CIG; i++)
     {
-        wiced_stop_timer(&iso.isoc_keep_alive_timer);
+        APP_ISOC_TRACE("start sending %d for button\n", i);
+        iso_sdu_count[i] += ISOC_MAX_BURST_COUNT;
+        append_button_status(i, c);
+
+        // stop keep alive timer if it is running
+        if (wiced_is_timer_in_use(&iso.isoc_keep_alive_timer[i]))
+        {
+            wiced_stop_timer(&iso.isoc_keep_alive_timer[i]);
+            while(wiced_is_timer_in_use(&iso.isoc_keep_alive_timer[i]))
+            {
+                cy_rtos_delay_milliseconds(10);
+            }
+            app_send_dummy(iso.CIG.cis[i].handle);
+        }
     }
 
-    // get the PSN info from the controller
-    isoc_get_psn_start(0);
-
-    // start to burst out data
-    if (!wiced_is_timer_in_use(&iso.isoc_send_data_timer))
-    {
-        //APP_ISOC_TRACE("[%s] start %dms timer", __FUNCTION__);
-        wiced_start_timer(&iso.isoc_send_data_timer, ISOC_TIMEOUT_IN_MSECONDS);
-    }
 }
 CY_SECTION_RAMFUNC_END
 
+static void isoc_idle_timeout( WICED_TIMER_PARAM_TYPE param )
+{
+    int i = (int)param;
+    APP_ISOC_TRACE("[%d] idle tout\n", i);
+    append_button_status(i, DUMMY);
+    app_send_dummy(iso.CIG.cis[i].handle);;
+}
 /********************************************************************
  * Function Name: isoc_init
  ********************************************************************
@@ -1142,7 +931,7 @@ void isoc_init(void)
 
     wiced_ble_isoc_cfg_t isoc_config = {
         .max_bis =0,
-        .max_cis =1,
+        .max_cis =MAX_CIS_PER_CIG,
     };
 
     // Register ISOC management callback
@@ -1166,16 +955,6 @@ void isoc_init(void)
         WICED_BT_TRACE("set CIG param failed!!");
     }
 
-    isoc_set_psn_idle();
-
-    // Init send data timer
-    wiced_init_timer(&iso.isoc_send_data_timer, isoc_send_data_handler,
-                     0, WICED_MILLI_SECONDS_PERIODIC_TIMER);
-
-    // Init keep alive timer
-    wiced_init_timer(&iso.isoc_keep_alive_timer, isoc_get_psn_start,
-                     0, WICED_SECONDS_PERIODIC_TIMER);
-
 #ifdef ISOC_STATS
     // Init stats timer
     wiced_init_timer(&iso_stats_timer, isoc_stats_timeout, 0,
@@ -1185,6 +964,15 @@ void isoc_init(void)
 #ifdef ISOC_MONITOR_FOR_DROPPED_SDUs
     wiced_bt_dev_register_vse_callback(isoc_vse_cback);
 #endif
+    for(int i = 0; i < MAX_CIS_PER_CIG; i++)
+    {
+       iso.CIG.cis[i].credits = CREDITS_PER_CIS;
+       iso.CIG.cis[i].m_q = xQueueCreate( CIS_QUEUE_LEN, sizeof(uint8_t) );
+       iso.CIG.cis[i].m_mtx = xSemaphoreCreateMutex();
+           // Init keep alive timer
+       wiced_init_timer(&iso.isoc_keep_alive_timer[i], isoc_idle_timeout,
+                     (void*)i, WICED_SECONDS_PERIODIC_TIMER);
+    }
 }
 
 /********************************************************************

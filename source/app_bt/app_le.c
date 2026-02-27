@@ -1,5 +1,5 @@
 /*
- * (c) 2025, Infineon Technologies AG, or an affiliate of Infineon
+ * (c) 2026, Infineon Technologies AG, or an affiliate of Infineon
  * Technologies AG. All rights reserved.
  * This software, associated documentation and materials ("Software") is
  * owned by Infineon Technologies AG or one of its affiliates ("Infineon")
@@ -116,12 +116,30 @@ static void app_le_scan_result_cback(wiced_bt_ble_scan_results_t *p_scan_result,
 
             WICED_BT_TRACE("Initiating connection");
             /* Initiate the connection */
+#if  0
             if(wiced_bt_gatt_le_connect(p_scan_result->remote_bd_addr,
                                         p_scan_result->ble_addr_type,
                                         BLE_CONN_MODE_HIGH_DUTY,
                                         WICED_TRUE) != WICED_TRUE)
+#else
+            wiced_ble_legacy_create_conn_t cfg;
+            cfg.le_scan_interval = 96;
+            cfg.le_scan_window = 16;
+            cfg.peer_address_type = p_scan_result->ble_addr_type;
+            memcpy(cfg.peer_address, p_scan_result->remote_bd_addr,  sizeof(wiced_bt_device_address_t));
+            cfg.initiator_filter_policy = WICED_BLE_LEGACY_INITIATOR_DO_NOT_USE_FILTER_LIST;
+            
+            cfg.conn_params.max_ce_length = 2;
+            cfg.conn_params.min_ce_length = 2;
+            cfg.conn_params.conn_latency = 0;
+            cfg.conn_params.conn_supervision_timeout = 500;
+            cfg.conn_params.conn_interval_max = 24;
+            cfg.conn_params.conn_interval_min = 24;
+            
+            if((result = wiced_ble_legacy_create_connection(&cfg)) != WICED_BT_SUCCESS)
+#endif
             {
-                WICED_BT_TRACE("wiced_bt_gatt_le_connect failed");
+                WICED_BT_TRACE("wiced_bt_gatt_le_connect failed %d\n", result);
             }
         }
         else
